@@ -305,6 +305,21 @@ Si Withallo publie un schéma de signature, une méthode `WebhookReceiver::verif
 
 ---
 
+## Documentation & exemples / Documentation & examples
+
+| Fichier | Contenu |
+|---|---|
+| [`docs/openapi.yaml`](docs/openapi.yaml) | Spécification **OpenAPI 3.1** complète de l'API Withallo (endpoints, schémas de payloads, erreurs, sécurité) |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Schémas **mermaid** : layers, request lifecycle, pipeline webhook, hiérarchie d'exceptions, extension points |
+| [`docs/examples/LaravelWebhookController.php`](docs/examples/LaravelWebhookController.php) | Contrôleur **Laravel** pour recevoir les webhooks Withallo |
+| [`docs/examples/LaravelSmsService.php`](docs/examples/LaravelSmsService.php) | Service **Laravel** (retry rate-limit, broadcast) |
+| [`docs/examples/plain-php-webhook.php`](docs/examples/plain-php-webhook.php) | Endpoint webhook **PHP natif** (sans framework) |
+| [`docs/examples/error-handling.php`](docs/examples/error-handling.php) | Gestion d'erreurs exhaustive (rate-limit, scope, validation…) |
+| [`docs/examples/live-smoke-test.php`](docs/examples/live-smoke-test.php) | Test end-to-end contre l'API réelle |
+| [`llms.txt`](llms.txt) | Index au format [llmstxt.org](https://llmstxt.org) pour les LLMs / agents IA |
+| [`CLAUDE.md`](CLAUDE.md) / [`AGENTS.md`](AGENTS.md) | Instructions pour outils IA (Claude, Cursor, Copilot, Codex) |
+| [`skill/SKILL.md`](skill/SKILL.md) | Descripteur de skill Claude Code |
+
 ## Développement / Development
 
 ```bash

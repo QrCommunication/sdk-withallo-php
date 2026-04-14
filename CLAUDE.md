@@ -147,7 +147,16 @@ Pattern de test : injection d'un `HttpClient` bati avec `MockHandler` Guzzle (vo
 
 ## Release workflow
 
-1. Merger une PR sur `main`
-2. `release-please` cree automatiquement une PR de release avec le changelog genere a partir des messages Conventional Commits
-3. Merger la PR release cree le tag `vX.Y.Z` et publie un release GitHub
-4. Packagist synchronise automatiquement via le webhook GitHub
+Tag-based, inspired by the QrCommunication/scell-io-scell-php pattern.
+
+1. Add a new section to `CHANGELOG.md` under `## [X.Y.Z] - YYYY-MM-DD`.
+2. Commit: `git commit -am "chore: release vX.Y.Z"`.
+3. Tag and push:
+   ```bash
+   git tag -a vX.Y.Z -m "Release vX.Y.Z"
+   git push && git push origin vX.Y.Z
+   ```
+4. The `release.yml` workflow runs automatically on the tag:
+   - `test` — composer install + composer validate + PHPStan + PHPUnit matrix (PHP 8.2/8.3/8.4)
+   - `release` — creates a GitHub Release with notes extracted from `CHANGELOG.md`
+5. Packagist auto-syncs via the GitHub -> Packagist webhook (configured once in the repo's Settings -> Webhooks).

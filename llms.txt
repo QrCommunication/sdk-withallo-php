@@ -1,0 +1,41 @@
+# qrcommunication/withallo-sdk (PHP)
+
+> PHP 8.2+ SDK for the Withallo (Allo) API — webhooks, calls, contacts, SMS, and phone-number management, plus a stateless receiver for incoming webhook payloads. Works in any PHP project (Laravel, Symfony, plain PHP).
+
+Withallo (https://withallo.com) is a cloud telephony platform with SMS and contact management. This SDK wraps its public REST API (`https://api.withallo.com/v1/api`) and provides a typed, well-tested PHP client using Guzzle under the hood.
+
+Key facts for AI agents:
+
+- **Package**: `qrcommunication/withallo-sdk` on Packagist (`composer require qrcommunication/withallo-sdk`).
+- **Namespace**: `QrCommunication\Withallo\`.
+- **Requirements**: PHP 8.2+, `ext-json`, `ext-curl`, `guzzlehttp/guzzle ^7.8`.
+- **Authentication**: raw API key in the `Authorization` header — **no `Bearer ` prefix**.
+- **Pagination**: 0-indexed `page` (default 0) + `size` (1–100, default 10).
+- **No webhook HMAC signature** is currently documented by Withallo (April 2026). Secure your endpoint with HTTPS + unguessable URL + `allo_number` whitelist.
+
+## Docs
+
+- [README.md](README.md): Bilingual (FR/EN) quick start, resource reference, error handling, security guidance.
+- [CLAUDE.md](CLAUDE.md): Instructions for AI coding agents (Claude, Cursor, Copilot, Codex).
+- [CHANGELOG.md](CHANGELOG.md): Per-version changelog.
+- [docs/openapi.yaml](docs/openapi.yaml): OpenAPI 3.1 spec for the underlying Withallo REST API.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): Architecture diagrams (mermaid), request flow, extension points.
+- [docs/examples/](docs/examples/): Copy-pasteable integration examples (Laravel controller, bare PHP webhook receiver, service class).
+- [skill/SKILL.md](skill/SKILL.md): Claude Code skill descriptor — use when working with this SDK in another project.
+
+## Source map
+
+- [src/WithalloClient.php](src/WithalloClient.php): Entry point.
+- [src/Config.php](src/Config.php): Immutable runtime configuration.
+- [src/HttpClient.php](src/HttpClient.php): Guzzle wrapper with typed exception mapping.
+- [src/Exceptions/](src/Exceptions/): `WithalloException`, `ApiException`, `AuthenticationException`, `ForbiddenException`, `ValidationException`, `NotFoundException`, `RateLimitException`, `InvalidWebhookPayloadException`.
+- [src/Enums/](src/Enums/): Backed enums (`Environment`, `Scope`, `WebhookTopic`, `CallResult`, `CallType`, `SmsType`, `SmsDirection`).
+- [src/Resources/](src/Resources/): `Webhooks`, `Calls`, `Contacts`, `Sms`, `PhoneNumbers`.
+- [src/Webhooks/](src/Webhooks/): `WebhookReceiver` (dispatcher) + `WebhookEvent` (value object).
+- [tests/](tests/): PHPUnit 11 suite — `tests/Support/MockHttpClient.php` provides a Guzzle `MockHandler`-backed helper.
+
+## Related
+
+- [JavaScript / TypeScript SDK](https://github.com/QrCommunication/sdk-withallo-js) (`@qrcommunication/withallo-sdk` on npm).
+- [Withallo API docs EN](https://help.withallo.com/en/api-reference/introduction).
+- [Withallo API docs FR](https://help.withallo.com/fr/api-reference/introduction).

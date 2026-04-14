@@ -1,0 +1,780 @@
+openapi: 3.1.0
+info:
+  title: Withallo (Allo) API
+  version: v1
+  summary: Public REST API of Withallo — webhooks, calls, contacts, SMS, phone numbers.
+  description: |
+    Public API of Withallo / Allo (https://withallo.com).
+
+    This OpenAPI document describes the five resource domains covered by the
+    `@qrcommunication/withallo-sdk` (JavaScript / TypeScript) and
+    `qrcommunication/withallo-sdk` (PHP) SDKs.
+
+    Two parallel concerns:
+
+    1. **REST endpoints** served from `https://api.withallo.com/v1/api`.
+    2. **Incoming webhooks** pushed by Withallo to your own HTTPS endpoint. The
+       webhook payload schema is documented under `#/components/schemas` even
+       though Withallo is the *sender* (schemas are provided for tooling /
+       client-side parsing).
+
+    ## Authentication
+
+    All REST requests are authenticated with a raw API key in the
+    `Authorization` header. There is **no `Bearer ` prefix** — the key is sent
+    verbatim:
+
+    ```
+    Authorization: sk_live_...
+    ```
+
+    Each API key carries one or more scopes that gate individual endpoints. A
+    request made with insufficient scope returns HTTP 403 with
+    `{"code":"API_KEY_INSUFFICIENT_SCOPE","details":[...]}`.
+
+    ## Pagination
+
+    List endpoints accept `page` (0-indexed, default 0) and `size`
+    (1-100, default 10) query parameters, and return metadata under
+    `data.metadata.pagination`.
+
+    ## Webhook security caveat
+
+    As of April 2026 the public Withallo documentation does not specify an
+    HMAC signature header for incoming webhooks. Harden your receiver with:
+    HTTPS-only endpoint, unguessable URL, IP whitelist if published,
+    `allo_number` membership check.
+  contact:
+    name: QrCommunication
+    email: contact@qrcommunication.com
+    url: https://qrcommunication.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  termsOfService: https://withallo.com/terms
+  x-sdk-php: https://github.com/QrCommunication/sdk-withallo-php
+  x-sdk-js: https://github.com/QrCommunication/sdk-withallo-js
+
+servers:
+  - url: https://api.withallo.com/v1/api
+    description: Production
+
+security:
+  - ApiKeyAuth: []
+
+tags:
+  - name: Webhooks
+    description: Manage webhook subscriptions (scope WEBHOOKS_READ_WRITE).
+  - name: Calls
+    description: Search call history (scope CONVERSATIONS_READ).
+  - name: Contacts
+    description: Read / search / create / update contacts.
+  - name: SMS
+    description: Send outbound SMS (scope SMS_SEND).
+  - name: Phone Numbers
+    description: List the phone numbers connected to your account.
+
+paths:
+  /webhooks:
+    get:
+      operationId: listWebhooks
+      tags: [Webhooks]
+      summary: List all webhook configurations on the account.
+      security:
+        - ApiKeyAuth: [WEBHOOKS_READ_WRITE]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Webhook"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+    post:
+      operationId: createWebhook
+      tags: [Webhooks]
+      summary: Subscribe to one or more webhook topics for a given Allo number.
+      security:
+        - ApiKeyAuth: [WEBHOOKS_READ_WRITE]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWebhookInput"
+            example:
+              allo_number: "+1234567890"
+              url: "https://example.com/webhooks/allo"
+              enabled: true
+              topics: [CALL_RECEIVED, SMS_RECEIVED]
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Webhook"
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /webhooks/{webhook_id}:
+    delete:
+      operationId: deleteWebhook
+      tags: [Webhooks]
+      summary: Delete a webhook configuration.
+      security:
+        - ApiKeyAuth: [WEBHOOKS_READ_WRITE]
+      parameters:
+        - $ref: "#/components/parameters/WebhookId"
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: Webhook not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string, example: WEBHOOK_NOT_FOUND }
+
+  /calls:
+    get:
+      operationId: searchCalls
+      tags: [Calls]
+      summary: Search call history filtered by Allo number and optional contact number.
+      security:
+        - ApiKeyAuth: [CONVERSATIONS_READ]
+      parameters:
+        - in: query
+          name: allo_number
+          required: true
+          schema: { $ref: "#/components/schemas/E164Number" }
+          description: Your Allo phone number to filter calls by.
+        - in: query
+          name: contact_number
+          schema: { $ref: "#/components/schemas/E164Number" }
+          description: Restrict results to calls with this specific contact number.
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [results, metadata]
+                    properties:
+                      results:
+                        type: array
+                        items: { $ref: "#/components/schemas/Call" }
+                      metadata: { $ref: "#/components/schemas/PaginationMetadata" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /contacts:
+    get:
+      operationId: searchContacts
+      tags: [Contacts]
+      summary: Paginated list of contacts.
+      description: |
+        Note: Withallo uses the plural `/contacts` here for search/create, but
+        switches to the singular `/contact/{id}` for GET and conversation.
+      security:
+        - ApiKeyAuth: [CONTACTS_READ]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [results, metadata]
+                    properties:
+                      results:
+                        type: array
+                        items: { $ref: "#/components/schemas/Contact" }
+                      metadata: { $ref: "#/components/schemas/PaginationMetadata" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+    post:
+      operationId: createContact
+      tags: [Contacts]
+      summary: Create a new contact (requires CONTACTS_READ_WRITE).
+      security:
+        - ApiKeyAuth: [CONTACTS_READ_WRITE]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateContactInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Contact" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+
+  /contacts/{contact_id}:
+    put:
+      operationId: updateContact
+      tags: [Contacts]
+      summary: Update an existing contact. `emails` / `numbers` replace the existing arrays.
+      security:
+        - ApiKeyAuth: [CONTACTS_READ_WRITE]
+      parameters:
+        - $ref: "#/components/parameters/ContactId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateContactInput" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Contact" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /contact/{contact_id}:
+    get:
+      operationId: getContact
+      tags: [Contacts]
+      summary: Fetch a single contact by its PID. Uses singular `/contact`.
+      security:
+        - ApiKeyAuth: [CONTACTS_READ]
+      parameters:
+        - $ref: "#/components/parameters/ContactId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Contact" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /contact/{contact_id}/conversation:
+    get:
+      operationId: searchContactConversation
+      tags: [Contacts]
+      summary: Paginated conversation history (calls + SMS) with a contact.
+      security:
+        - ApiKeyAuth: [CONVERSATIONS_READ]
+      parameters:
+        - $ref: "#/components/parameters/ContactId"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [results, metadata]
+                    properties:
+                      results:
+                        type: array
+                        items: { $ref: "#/components/schemas/ConversationEntry" }
+                      metadata: { $ref: "#/components/schemas/PaginationMetadata" }
+
+  /sms:
+    post:
+      operationId: sendSms
+      tags: [SMS]
+      summary: Send an SMS. Two flavors share the endpoint.
+      description: |
+        Payload shape depends on the target country:
+
+        - **US / international**: `{ from, to, message }` — `from` must be one
+          of your Allo numbers.
+        - **France**: `{ sender_id, to, message }` — `sender_id` must be a
+          pre-verified alphanumeric (3–11 chars) or short code approved by
+          Allo support. French mobile operators block business SMS sent from
+          standard mobile numbers (ARCEP ruling, January 2023).
+      security:
+        - ApiKeyAuth: [SMS_SEND]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: "#/components/schemas/SendSmsInput"
+                - $ref: "#/components/schemas/SendSmsFranceInput"
+            examples:
+              us:
+                summary: US / international
+                value:
+                  from: "+1234567890"
+                  to: "+0987654321"
+                  message: "Hello from Allo"
+              france:
+                summary: France (sender ID)
+                value:
+                  sender_id: "MyCompany"
+                  to: "+33612345678"
+                  message: "Bonjour depuis Allo"
+      responses:
+        "200":
+          description: Sent
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/SentSms" }
+        "400":
+          description: Bad Request (e.g. INVALID_SENDER_ID for unverified French sender)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorBody" }
+
+  /numbers:
+    get:
+      operationId: listNumbers
+      tags: [Phone Numbers]
+      summary: List all Allo phone numbers connected to your account.
+      security:
+        - ApiKeyAuth: [CONVERSATIONS_READ]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/PhoneNumber" }
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: |
+        Raw API key sent verbatim — **no `Bearer ` prefix**. Generate keys at
+        https://web.withallo.com/settings/api. Each key has scopes that gate
+        individual endpoints.
+
+  parameters:
+    WebhookId:
+      in: path
+      name: webhook_id
+      required: true
+      schema: { type: string, example: "web-2NfDKEm9sF8xK3pQr1Zt" }
+    ContactId:
+      in: path
+      name: contact_id
+      required: true
+      schema: { type: string, example: "cnt_abc123" }
+    Page:
+      in: query
+      name: page
+      schema: { type: integer, minimum: 0, default: 0 }
+      description: 0-indexed page number.
+    Size:
+      in: query
+      name: size
+      schema: { type: integer, minimum: 1, maximum: 100, default: 10 }
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid API key
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+          example: { code: API_KEY_INVALID, details: null }
+    Forbidden:
+      description: API key lacks the required scope
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+          example:
+            code: API_KEY_INSUFFICIENT_SCOPE
+            details:
+              - { message: "required=CONTACTS_READ", field: scope }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    ValidationError:
+      description: Request payload is invalid
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    RateLimited:
+      description: Too many requests
+      headers:
+        Retry-After:
+          schema: { type: integer }
+          description: Seconds to wait before retrying.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+          example: { code: RATE_LIMITED }
+
+  schemas:
+    E164Number:
+      type: string
+      pattern: "^\\+[1-9]\\d{1,14}$"
+      example: "+33612345678"
+
+    PaginationMetadata:
+      type: object
+      properties:
+        pagination:
+          type: object
+          properties:
+            total_pages: { type: integer, example: 5 }
+            current_page: { type: integer, example: 0 }
+
+    ErrorBody:
+      type: object
+      properties:
+        code:
+          type: string
+          description: Machine-readable error code (e.g. `API_KEY_INVALID`)
+        details:
+          type: array
+          nullable: true
+          items:
+            type: object
+            properties:
+              message: { type: string }
+              field: { type: string }
+        message: { type: string }
+
+    WebhookTopic:
+      type: string
+      enum: [CALL_RECEIVED, SMS_RECEIVED, CONTACT_CREATED, CONTACT_UPDATED]
+
+    Webhook:
+      type: object
+      properties:
+        id: { type: string, example: "web-2NfDKEm9sF8xK3pQr1Zt" }
+        allo_number: { $ref: "#/components/schemas/E164Number" }
+        alloNumber: { $ref: "#/components/schemas/E164Number" }
+        enabled: { type: boolean }
+        url: { type: string, format: uri }
+        topics:
+          type: array
+          items: { $ref: "#/components/schemas/WebhookTopic" }
+      description: |
+        Note: the REST endpoint returns `allo_number` (snake_case) on `GET`
+        and `alloNumber` (camelCase) on `POST` — both are modelled here.
+
+    CreateWebhookInput:
+      type: object
+      required: [allo_number, url, topics]
+      properties:
+        allo_number: { $ref: "#/components/schemas/E164Number" }
+        url: { type: string, format: uri }
+        topics:
+          type: array
+          items: { $ref: "#/components/schemas/WebhookTopic" }
+        enabled: { type: boolean, default: true }
+
+    Call:
+      type: object
+      properties:
+        id: { type: string, example: call_abc123 }
+        from_number: { $ref: "#/components/schemas/E164Number" }
+        to_number: { $ref: "#/components/schemas/E164Number" }
+        length_in_minutes: { type: number }
+        type:
+          type: string
+          enum: [INBOUND, OUTBOUND]
+        result:
+          type: string
+          enum: [ANSWERED, VOICEMAIL, TRANSFERRED_AI, TRANSFERRED_EXTERNAL, BLOCKED, FAILED]
+          description: Only on webhook payloads; search endpoint omits it.
+        summary: { type: string, nullable: true }
+        tag: { type: string, nullable: true }
+        recording_url: { type: string, format: uri, nullable: true }
+        start_date: { type: string, format: date-time }
+        transcript:
+          type: array
+          items:
+            type: object
+            properties:
+              source: { type: string, enum: [AGENT, EXTERNAL, USER] }
+              text: { type: string }
+              time: { type: string, format: date-time }
+              start_seconds: { type: number }
+              end_seconds: { type: number }
+
+    Contact:
+      type: object
+      properties:
+        id: { type: string, example: cnt_abc123 }
+        name: { type: string, nullable: true }
+        last_name: { type: string, nullable: true }
+        job_title: { type: string, nullable: true }
+        website: { type: string, nullable: true }
+        status: { type: string, nullable: true }
+        is_archived: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        numbers:
+          type: array
+          items: { $ref: "#/components/schemas/E164Number" }
+        emails:
+          type: array
+          items: { type: string, format: email }
+        company:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string }
+            name: { type: string }
+        engagement: { type: string, nullable: true }
+        last_activity_date: { type: string, format: date-time, nullable: true }
+
+    CreateContactInput:
+      type: object
+      required: [numbers]
+      properties:
+        numbers:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/E164Number" }
+        name: { type: string, nullable: true }
+        last_name: { type: string, nullable: true }
+        job_title: { type: string, nullable: true }
+        website: { type: string, nullable: true }
+        emails:
+          type: array
+          items: { type: string, format: email }
+
+    UpdateContactInput:
+      type: object
+      description: Only provided fields are updated. `emails`/`numbers` REPLACE the existing values.
+      properties:
+        name: { type: string, nullable: true }
+        last_name: { type: string, nullable: true }
+        job_title: { type: string, nullable: true }
+        website: { type: string, nullable: true }
+        emails:
+          type: array
+          items: { type: string, format: email }
+        numbers:
+          type: array
+          items: { $ref: "#/components/schemas/E164Number" }
+
+    ConversationEntry:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [CALL, TEXT_MESSAGE]
+        call:
+          oneOf:
+            - $ref: "#/components/schemas/Call"
+            - type: "null"
+        message:
+          oneOf:
+            - type: object
+              properties:
+                from_number: { $ref: "#/components/schemas/E164Number" }
+                to_number: { $ref: "#/components/schemas/E164Number" }
+                type: { type: string, enum: [INBOUND, OUTBOUND] }
+                content: { type: string }
+                start_date: { type: string, format: date-time }
+            - type: "null"
+
+    SendSmsInput:
+      type: object
+      required: [from, to, message]
+      properties:
+        from: { $ref: "#/components/schemas/E164Number" }
+        to: { $ref: "#/components/schemas/E164Number" }
+        message:
+          type: string
+          minLength: 1
+          maxLength: 1000
+
+    SendSmsFranceInput:
+      type: object
+      required: [sender_id, to, message]
+      properties:
+        sender_id:
+          type: string
+          minLength: 3
+          maxLength: 11
+          pattern: "^[A-Za-z0-9]+$"
+          description: Pre-verified alphanumeric sender (or short code).
+        to: { $ref: "#/components/schemas/E164Number" }
+        message:
+          type: string
+          minLength: 1
+          maxLength: 1000
+
+    SentSms:
+      type: object
+      properties:
+        from_number:
+          nullable: true
+          $ref: "#/components/schemas/E164Number"
+        sender_id: { type: string, nullable: true }
+        to_number: { $ref: "#/components/schemas/E164Number" }
+        type: { type: string, example: OUTBOUND }
+        content: { type: string }
+        start_date: { type: string, format: date-time }
+
+    PhoneNumber:
+      type: object
+      properties:
+        number: { $ref: "#/components/schemas/E164Number" }
+        name: { type: string }
+        country:
+          type: string
+          description: ISO 3166-1 alpha-2 (e.g. US, FR)
+          example: FR
+        is_shared_number: { type: boolean }
+
+    # --- Incoming webhook envelopes ------------------------------------
+    WebhookEnvelope:
+      type: object
+      description: |
+        Outer envelope pushed by Withallo to your webhook URL. The shape of
+        `data` depends on `topic`; see the topic-specific schemas below.
+      required: [topic, data]
+      properties:
+        topic: { $ref: "#/components/schemas/WebhookTopic" }
+        data: { type: object, additionalProperties: true }
+
+    CallReceivedPayload:
+      type: object
+      description: Sent when a call ends.
+      properties:
+        id: { type: string }
+        start_date: { type: string, format: date-time }
+        recording_url: { type: string, nullable: true }
+        from_number: { $ref: "#/components/schemas/E164Number" }
+        from_name: { type: string, nullable: true }
+        to: { $ref: "#/components/schemas/E164Number" }
+        to_name: { type: string, nullable: true }
+        length_in_minutes: { type: number }
+        length: { type: string, example: "5m 30s" }
+        tag: { type: string, nullable: true }
+        summary: { type: string, nullable: true }
+        one_sentence_summary: { type: string, nullable: true }
+        transcriptions:
+          type: array
+          items:
+            type: object
+            properties:
+              source: { type: string }
+              time: { type: string, format: date-time }
+              text: { type: string }
+        concatenated_transcript: { type: string }
+        data_collected: { type: object, additionalProperties: true }
+        ivr_result:
+          type: array
+          items:
+            type: object
+            properties:
+              dtmf_key: { type: string, nullable: true }
+              text_key: { type: string }
+        type: { type: string, enum: [INBOUND, OUTBOUND] }
+        result:
+          type: string
+          enum: [ANSWERED, VOICEMAIL, TRANSFERRED_AI, TRANSFERRED_EXTERNAL, BLOCKED, FAILED]
+        integration_id: { type: string, nullable: true }
+        transfer_from: { $ref: "#/components/schemas/TransferParty" }
+        transfer_to: { $ref: "#/components/schemas/TransferParty" }
+        transfer_original_call_id: { type: string, nullable: true }
+        user_email: { type: string, format: email }
+        original_to_number: { type: string, nullable: true }
+        original_to_name: { type: string, nullable: true }
+
+    SmsReceivedPayload:
+      type: object
+      description: Sent when an SMS is sent or received.
+      properties:
+        id: { type: string }
+        direction: { type: string, enum: [INBOUND, OUTBOUND] }
+        type: { type: string, enum: [SMS, MMS] }
+        content: { type: string }
+        sent_at: { type: string, format: date-time }
+        from_number: { $ref: "#/components/schemas/E164Number" }
+        to_number: { $ref: "#/components/schemas/E164Number" }
+        from_name: { type: string, nullable: true }
+        to_name: { type: string, nullable: true }
+
+    ContactEventPayload:
+      type: object
+      description: Sent on CONTACT_CREATED and CONTACT_UPDATED.
+      properties:
+        id: { type: string }
+        name: { type: string, nullable: true }
+        last_name: { type: string, nullable: true }
+        company: { type: string, nullable: true }
+        emails:
+          type: array
+          items: { type: string, format: email }
+        numbers:
+          type: array
+          items: { $ref: "#/components/schemas/E164Number" }
+
+    TransferParty:
+      type: object
+      nullable: true
+      properties:
+        number: { type: string, nullable: true }
+        user_email: { type: string, nullable: true, format: email }
+        user_name: { type: string, nullable: true }
