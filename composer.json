@@ -3,7 +3,16 @@
     "description": "PHP SDK for Withallo (Allo) API — webhooks, calls, contacts, SMS and phone numbers",
     "type": "library",
     "license": "MIT",
-    "keywords": ["withallo", "allo", "sms", "webhooks", "calls", "contacts", "sdk", "api"],
+    "keywords": [
+        "withallo",
+        "allo",
+        "sms",
+        "webhooks",
+        "calls",
+        "contacts",
+        "sdk",
+        "api"
+    ],
     "homepage": "https://github.com/QrCommunication/sdk-withallo-php",
     "authors": [
         {
