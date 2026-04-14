@@ -71,7 +71,7 @@ try {
     $log('invalid_payload', ['reason' => $e->getMessage()]);
     http_response_code(400);
     echo '{"error":"invalid_payload"}';
-} catch (\Throwable $e) {
+} catch (Throwable $e) {
     $log('handler_failed', ['type' => $e::class, 'message' => $e->getMessage()]);
     // Still reply 200 to avoid Withallo auto-disabling the webhook for a
     // transient error inside our own handler code.

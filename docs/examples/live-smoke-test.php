@@ -41,7 +41,7 @@ echo "=== Withallo SDK live smoke test ===\n\n";
 echo '[1] testConnection()... ';
 echo $client->testConnection() ? "OK\n" : "FAILED\n";
 
-$reportError = function (\Throwable $err): void {
+$reportError = function (Throwable $err): void {
     if ($err instanceof ForbiddenException) {
         echo '    FORBIDDEN: missing='.implode(',', $err->requiredScopes())."\n";
     } elseif ($err instanceof ApiException) {
@@ -61,7 +61,7 @@ try {
         echo '    - '.($n['number'] ?? '?').' ('.($n['name'] ?? '?').', '.($n['country'] ?? '?').")\n";
     }
     $firstNumber = $numbers[0]['number'] ?? null;
-} catch (\Throwable $err) {
+} catch (Throwable $err) {
     $reportError($err);
 }
 
@@ -69,7 +69,7 @@ echo "\n[3] webhooks->list()\n";
 try {
     $webhooks = $client->webhooks->list();
     echo '    count: '.count($webhooks)."\n";
-} catch (\Throwable $err) {
+} catch (Throwable $err) {
     $reportError($err);
 }
 
@@ -90,7 +90,7 @@ if ($firstNumber === null) {
             $client->webhooks->delete($webhookId);
             echo "    deleted OK\n";
         }
-    } catch (\Throwable $err) {
+    } catch (Throwable $err) {
         $reportError($err);
     }
 }
@@ -101,7 +101,7 @@ try {
     $count = count($result['results'] ?? []);
     $total = $result['metadata']['pagination']['total_pages'] ?? '?';
     echo "    results={$count} total_pages={$total}\n";
-} catch (\Throwable $err) {
+} catch (Throwable $err) {
     $reportError($err);
 }
 
@@ -115,7 +115,7 @@ if (is_string($smsTarget) && $smsTarget !== '') {
             message: 'Withallo SDK smoke test '.date('H:i:s'),
         );
         echo '    sent: '.json_encode($result)."\n";
-    } catch (\Throwable $err) {
+    } catch (Throwable $err) {
         $reportError($err);
     }
 }

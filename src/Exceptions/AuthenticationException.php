@@ -9,6 +9,4 @@ namespace QrCommunication\Withallo\Exceptions;
  *
  * Withallo returns: `{"code":"API_KEY_INVALID","details":null}`
  */
-final class AuthenticationException extends ApiException
-{
-}
+final class AuthenticationException extends ApiException {}

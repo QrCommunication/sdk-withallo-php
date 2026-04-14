@@ -9,6 +9,4 @@ use RuntimeException;
 /**
  * Base exception for all Withallo SDK errors.
  */
-class WithalloException extends RuntimeException
-{
-}
+class WithalloException extends RuntimeException {}

@@ -7,6 +7,4 @@ namespace QrCommunication\Withallo\Exceptions;
 /**
  * Raised when a webhook payload cannot be parsed or fails structural validation.
  */
-final class InvalidWebhookPayloadException extends WithalloException
-{
-}
+final class InvalidWebhookPayloadException extends WithalloException {}

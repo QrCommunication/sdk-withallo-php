@@ -26,8 +26,7 @@ final class WebhookEvent
         public readonly WebhookTopic $topic,
         public readonly array $data,
         public readonly array $raw,
-    ) {
-    }
+    ) {}
 
     public function isCall(): bool
     {

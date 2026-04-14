@@ -31,8 +31,7 @@ final readonly class SmsService
 {
     public function __construct(
         private WithalloClient $client,
-    ) {
-    }
+    ) {}
 
     /**
      * Send an appointment reminder with automatic retry on rate-limit.

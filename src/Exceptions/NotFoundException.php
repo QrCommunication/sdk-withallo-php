@@ -7,6 +7,4 @@ namespace QrCommunication\Withallo\Exceptions;
 /**
  * Raised on HTTP 404 — the requested resource does not exist.
  */
-final class NotFoundException extends ApiException
-{
-}
+final class NotFoundException extends ApiException {}

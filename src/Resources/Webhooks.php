@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace QrCommunication\Withallo\Resources;
 
 use QrCommunication\Withallo\Enums\WebhookTopic;
+use QrCommunication\Withallo\Webhooks\WebhookReceiver;
 
 /**
  * Webhooks resource — manage webhook configurations.
@@ -15,7 +16,7 @@ use QrCommunication\Withallo\Enums\WebhookTopic;
  *   $client->webhooks->create(alloNumber: '+1234567890', url: 'https://...', topics: [...]);
  *   $client->webhooks->delete('web-abc123');
  *
- * To process incoming webhook payloads, use {@see \QrCommunication\Withallo\Webhooks\WebhookReceiver}.
+ * To process incoming webhook payloads, use {@see WebhookReceiver}.
  */
 final class Webhooks extends Resource
 {

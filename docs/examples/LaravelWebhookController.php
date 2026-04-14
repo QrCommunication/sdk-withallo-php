@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
+use App\Jobs\ProcessAlloCall;
+use App\Jobs\ProcessAlloInboundSms;
+use App\Jobs\SyncAlloContact;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -67,18 +70,18 @@ final class WithalloWebhookController extends Controller
                 $callId = $event->get('id');
 
                 // Persist the call, update CRM, enqueue an AI summary job, ...
-                dispatch(new \App\Jobs\ProcessAlloCall($callId, $event->data));
+                dispatch(new ProcessAlloCall($callId, $event->data));
             })
             ->on(WebhookTopic::SMS_RECEIVED, function (WebhookEvent $event): void {
                 if ($event->get('direction') === 'INBOUND') {
-                    dispatch(new \App\Jobs\ProcessAlloInboundSms($event->data));
+                    dispatch(new ProcessAlloInboundSms($event->data));
                 }
             })
             ->on(WebhookTopic::CONTACT_CREATED, function (WebhookEvent $event): void {
-                dispatch(new \App\Jobs\SyncAlloContact($event->data, 'created'));
+                dispatch(new SyncAlloContact($event->data, 'created'));
             })
             ->on(WebhookTopic::CONTACT_UPDATED, function (WebhookEvent $event): void {
-                dispatch(new \App\Jobs\SyncAlloContact($event->data, 'updated'));
+                dispatch(new SyncAlloContact($event->data, 'updated'));
             });
 
         return $receiver;
