@@ -1,14 +1,3 @@
-# =============================================================================
-# Withallo SDK (PHP) - Release Workflow
-# =============================================================================
-# Triggered by pushing a tag v* (e.g. v0.1.0).
-# Runs full tests + static analysis, then creates a GitHub Release with notes
-# extracted from CHANGELOG.md.
-#
-# Packagist is synced via the GitHub -> Packagist webhook (configured in the
-# repo's Settings -> Webhooks). No publish step is needed here.
-# =============================================================================
-
 name: Release
 
 on:
@@ -17,109 +6,238 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # Full test + static analysis pass before the release
-  # ---------------------------------------------------------------------------
-  test:
-    name: Pre-release Tests
+  validate:
+    name: Validate stable tag, library identity and main ancestry
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: true
-      matrix:
-        php: ['8.2', '8.3', '8.4']
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.identity.outputs.tag }}
+      version: ${{ steps.identity.outputs.version }}
+      commit: ${{ steps.identity.outputs.commit }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup PHP ${{ matrix.php }}
-        uses: shivammathur/setup-php@v2
+      - name: Checkout exact event commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          php-version: ${{ matrix.php }}
-          extensions: mbstring, json, curl, xml
-          coverage: none
-          tools: composer:v2
-
-      - name: Get Composer cache directory
-        id: composer-cache
-        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache Composer dependencies
-        uses: actions/cache@v4
-        with:
-          path: ${{ steps.composer-cache.outputs.dir }}
-          key: ${{ runner.os }}-composer-${{ matrix.php }}-${{ hashFiles('**/composer.json') }}
-          restore-keys: |
-            ${{ runner.os }}-composer-${{ matrix.php }}-
-            ${{ runner.os }}-composer-
-
-      - name: Install dependencies
-        run: composer install --prefer-dist --no-progress --no-interaction
-
-      - name: Validate composer.json
-        run: composer validate --strict
-
-      - name: Run PHPStan
-        run: composer analyse
-
-      - name: Run PHPUnit
-        run: composer test
-
-  # ---------------------------------------------------------------------------
-  # GitHub Release with notes extracted from CHANGELOG.md
-  # ---------------------------------------------------------------------------
-  release:
-    name: Create GitHub Release
-    runs-on: ubuntu-24.04
-    needs: test
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Extract version from tag
-        id: version
-        env:
-          GH_REF: ${{ github.ref }}
+      - name: Validate tag and exact commit against fresh main
+        id: identity
+        shell: bash
         run: |
-          VERSION="${GH_REF#refs/tags/v}"
-          TAG="${GH_REF#refs/tags/}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Extract release notes from CHANGELOG
-        id: changelog
-        env:
-          RELEASE_VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          NOTES=$(awk "/^## \[$RELEASE_VERSION\]/{flag=1; next} /^## \[/{flag=0} flag" CHANGELOG.md)
-          if [ -z "$NOTES" ]; then
-            NOTES="Release $RELEASE_VERSION"
+          set -euo pipefail
+          stable_ref='^refs/tags/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          if [[ ! "$GITHUB_REF" =~ $stable_ref || ! "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'A stable vX.Y.Z tag and exact commit SHA are required.' >&2
+            exit 1
           fi
-          echo "$NOTES" > release_notes.md
+          tag="${GITHUB_REF#refs/tags/}"
+          tag_commit="$(git rev-parse --verify "refs/tags/${tag}^{commit}")"
+          head_commit="$(git rev-parse --verify HEAD)"
+          if [[ "$tag_commit" != "$GITHUB_SHA" || "$head_commit" != "$GITHUB_SHA" ]]; then
+            echo 'Tag, event SHA and checked-out commit must match exactly.' >&2
+            exit 1
+          fi
+          git fetch --no-tags --force origin +refs/heads/main:refs/remotes/origin/main
+          git show-ref --verify --quiet refs/remotes/origin/main
+          git merge-base --is-ancestor "$tag_commit" refs/remotes/origin/main
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = json.loads(Path('composer.json').read_text(encoding='utf-8'))
+          if manifest.get('name') != 'qrcommunication/withallo-sdk' or 'version' in manifest:
+              raise SystemExit('Expected the Withallo library identity without a root version.')
+          PY
+          printf 'tag=%s\nversion=%s\ncommit=%s\n' "$tag" "${tag#v}" "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+  checks:
+    name: Complete library test and quality matrix
+    needs: validate
+    uses: ./.github/workflows/tests.yml
+
+  release:
+    name: Verify or create GitHub Release
+    needs: [validate, checks]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout validated commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          name: Withallo SDK PHP v${{ steps.version.outputs.version }}
-          body_path: release_notes.md
-          draft: false
-          prerelease: ${{ contains(steps.version.outputs.tag, '-') }}
-          generate_release_notes: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ needs.validate.outputs.commit }}
+          persist-credentials: false
 
-      - name: Release summary
+      - name: Extract unique visible release notes
         env:
-          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        shell: bash
         run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+          version = os.environ['RELEASE_VERSION']
+          if re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version) is None:
+              raise SystemExit('Invalid stable release version.')
+          text = Path('CHANGELOG.md').read_text(encoding='utf-8')
+          lines = re.sub(r'<!--[\s\S]*?(?:-->|$)', '', text).splitlines()
+          matches = []
+          for index, line in enumerate(lines):
+              heading = re.fullmatch(r'##[ \t]+\[([^\]\r\n]+)\](?:[ \t]+[^\r\n]*)?', line)
+              if heading is not None and heading.group(1) == version:
+                  matches.append(index)
+          if len(matches) != 1:
+              raise SystemExit('Exactly one changelog section must match the release version.')
+          start = matches[0] + 1
+          end = next((index for index in range(start, len(lines)) if re.match(r'^##(?:[ \t]|$)', lines[index])), len(lines))
+          notes = '\n'.join(lines[start:end]).strip()
+          visible = re.sub(r'^\s*#+[^\r\n]*$', '', notes, flags=re.M).strip()
+          if not visible:
+              raise SystemExit('The matching changelog section must contain visible release notes.')
+          # Bound the body before any API request; never truncate release notes.
+          if len((notes + '\n').encode('utf-16-le')) // 2 > 124999:
+              raise SystemExit('Release notes exceed the pipeline body limit.')
+          Path(os.environ['RUNNER_TEMP'], 'withallo-release-notes.md').write_text(notes + '\n', encoding='utf-8')
+          PY
+
+      - name: Check existing GitHub Release without changing it
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/withallo-release-check.py" <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+          tag = os.environ['RELEASE_TAG']
+          commit = os.environ['RELEASE_COMMIT']
+          repository = os.environ['GITHUB_REPOSITORY']
+          if re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', tag) is None:
+              raise SystemExit('Invalid stable release tag.')
+          if re.fullmatch(r'[0-9a-f]{40}', commit) is None:
+              raise SystemExit('Invalid exact release commit.')
+          if re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository) is None:
+              raise SystemExit('Invalid GitHub repository identity.')
+          if sys.argv[1:] not in [['optional'], ['required'], ['create']]:
+              raise SystemExit('Unknown release inspection mode.')
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, request, file, code, message, headers, newurl):
+                  raise RuntimeError('Release API redirects are not permitted.')
+          headers = {
+              'Accept': 'application/vnd.github+json',
+              'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+              'X-GitHub-Api-Version': '2022-11-28',
+          }
+          endpoint = f'https://api.github.com/repos/{repository}/releases'
+          opener = urllib.request.build_opener(NoRedirect())
+          expected_body = Path(os.environ['RUNNER_TEMP'], 'withallo-release-notes.md').read_text(encoding='utf-8')
+          def verify(current):
+              if (not isinstance(current, dict) or current.get('tag_name') != tag
+                      or current.get('target_commitish') != commit or current.get('body') != expected_body
+                      or current.get('name') != f'Withallo SDK PHP {tag}'
+                      or current.get('draft') is not False or current.get('prerelease') is not False):
+                  raise SystemExit('An existing GitHub Release differs from the validated tag, commit, notes or stable policy.')
+          def inspect(optional=False):
+              request = urllib.request.Request(endpoint + '/tags/' + tag, headers=headers, method='GET')
+              try:
+                  with opener.open(request, timeout=30) as response:
+                      if response.status != 200:
+                          raise RuntimeError('Expected HTTP 200 for the GitHub Release.')
+                      current = json.load(response)
+              except urllib.error.HTTPError as error:
+                  if error.code != 404 or not optional:
+                      raise
+                  return None
+              verify(current)
+              return current
+          if sys.argv[1] == 'create':
+              payload = {
+                  'tag_name': tag, 'target_commitish': commit, 'name': f'Withallo SDK PHP {tag}',
+                  'body': expected_body, 'draft': False, 'prerelease': False,
+                  'generate_release_notes': False,
+              }
+              request = urllib.request.Request(
+                  endpoint, data=json.dumps(payload).encode('utf-8'),
+                  headers={**headers, 'Content-Type': 'application/json'}, method='POST',
+              )
+              try:
+                  with opener.open(request, timeout=30) as response:
+                      if response.status != 201:
+                          raise RuntimeError('Expected HTTP 201 from create-only release request.')
+                      verify(json.load(response))
+              except urllib.error.HTTPError as error:
+                  if error.code != 422:
+                      raise SystemExit(f'Release creation returned HTTP {error.code}; no retry or update attempted.') from error
+                  detail = json.load(error)
+                  expected_conflict = {'resource': 'Release', 'code': 'already_exists', 'field': 'tag_name'}
+                  if (not isinstance(detail, dict) or not isinstance(detail.get('errors'), list)
+                          or len(detail['errors']) != 1 or not isinstance(detail['errors'][0], dict)
+                          or any(detail['errors'][0].get(key) != value for key, value in expected_conflict.items())):
+                      raise SystemExit('HTTP 422 is not an exact existing-tag conflict; no update attempted.')
+                  # A concurrent creator won. Accept only an identical public stable release.
+                  inspect()
+                  print('Concurrent GitHub Release matches exactly; no update performed.')
+              except (urllib.error.URLError, TimeoutError) as error:
+                  raise SystemExit('Release creation network outcome is unknown; no retry or update attempted. Inspect before rerunning.') from error
+          elif inspect(optional=sys.argv[1] == 'optional') is None:
+              with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8') as output:
+                  output.write('exists=false\n')
+              raise SystemExit(0)
+          with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8') as output:
+              output.write('exists=true\n')
+          print(f'GitHub Release {tag} matches the exact validated commit and notes.')
+          PY
+          python3 "$RUNNER_TEMP/withallo-release-check.py" optional
+
+      - name: Create GitHub Release only when absent
+        if: steps.existing.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$RUNNER_TEMP/withallo-release-check.py" create
+
+      - name: Verify the resulting GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$RUNNER_TEMP/withallo-release-check.py" required
+
+      - name: Report GitHub Release verification scope
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
           {
-            echo "## Release v$RELEASE_VERSION created"
-            echo ""
-            echo "- GitHub Release created automatically"
-            echo "- Packagist will sync via the GitHub webhook"
-            echo "- Check: https://packagist.org/packages/qrcommunication/withallo-sdk"
+            printf '## GitHub Release %s verified\n\n' "$RELEASE_TAG"
+            printf 'Exact target commit: `%s`.\n\n' "$RELEASE_COMMIT"
+            printf 'Packagist synchronization and the public Composer package require separate verification.\n'
           } >> "$GITHUB_STEP_SUMMARY"

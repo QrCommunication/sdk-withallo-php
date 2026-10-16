@@ -128,11 +128,12 @@ Chaque ApiException expose : `$e->httpStatus`, `$e->responseBody`, `$e->getError
 
 ## Conventions de code
 
-- PHP 8.2+ strict types
+- Contrat consommateur PHP `^8.2`, avec strict types ; ne pas relever ce minimum pour mettre a jour les outils de developpement.
 - PSR-4 : `QrCommunication\Withallo\`
 - Retours types `array<string, mixed>` pour les reponses API (documentees en PHPDoc)
-- Guzzle 7.8+ comme client HTTP (injectable via constructeur HttpClient pour tester)
-- PHPUnit 11 + MockHandler Guzzle pour les tests sans reseau
+- Guzzle `^7.8 || ^8.0` comme client HTTP, injectable via le constructeur de `HttpClient`. Les deux majeures restent prises en charge.
+- PHPUnit `^11.0 || ^12.0 || ^13.0` selon la plateforme : PHPUnit 11 sous PHP 8.2, 12 sous PHP 8.3, 13 sous PHP 8.4.1+ ; les versions exactes sont resolues par Composer.
+- Composer 2.10.3 pour la recette CI. La bibliotheque ne versionne pas `composer.lock` : chaque job resout son graphe compatible, affiche les versions effectives et audite le verrou ephemere sans contourner les exigences de plateforme ou les avis de securite.
 
 ## Tests
 
@@ -143,20 +144,41 @@ composer lint             # Pint (format)
 composer lint-check       # Pint en mode verification
 ```
 
-Pattern de test : injection d'un `HttpClient` bati avec `MockHandler` Guzzle (voir `tests/Support/MockHttpClient.php`).
+Pattern de test : vrai `HttpClient` du SDK avec un vrai `GuzzleHttp\Client`, son `HandlerStack`, ses requetes PSR-7 et le `MockHandler` officiel comme handler terminal (voir `tests/Support/MockHttpClient.php`). La fixture recoit des reponses ; le cas `ConnectException` construit son handler dedie dans `tests/HttpClientTest.php`, sans modifier la fixture.
+
+Ne pas appeler l'API Withallo pour la recette : aucun envoi SMS, appel telephonique ou contact reel. Ces tests traversent le client Guzzle et la conversion du SDK, mais ne prouvent pas le transport cURL/TLS/DNS reel. Les cas d'authentification brute, 401 et 403 existants restent les references ; ne pas les dupliquer.
+
+La recette de reference `.github/workflows/tests.yml` se declenche sur push/PR `main` et via `workflow_call`. Elle couvre PHP 8.2/8.3/8.4/8.5 avec les dernieres dependances compatibles, plus une ligne PHP 8.4/Guzzle 7 distincte. Elle valide le manifeste, la plateforme et les audits global/production avant les suites. PHPUnit (fail-empty et deprecations strictes), PHPStan et Pint s'executent ensuite dans un namespace sans route externe, avec environnement limite et sans credentials. L'echec de l'isolation doit arreter la recette.
+
+Preuve locale du 16 octobre 2026, PHP 8.4.26 : Guzzle 7.15.5/PHPUnit 11.5.57 et Guzzle 8.2.0/PHPUnit 13.4.3 passent chacun 36 tests et 91 assertions, sans echec, erreur ou skip. Les 9 nouveaux cas de `HttpClientTest` apportent 36 assertions sur les erreurs de connexion, les statuts 400/422/404/500 et `429 Retry-After`. PHPStan et Pint passent ; deux mutations privees (conversion reseau perdue, mauvais type 404) sont detectees. Le schema XML PHPUnit 11 reste accepte sans deprecation observee par PHPUnit 13.4.3.
+
+Cette preuve locale ne vaut pas execution de toute la matrice : les jobs GitHub distants, notamment PHP 8.2/8.3/8.5, restent a confirmer apres push. Aucun resultat local ne prouve la publication Packagist.
 
 ## Release workflow
 
-Tag-based, inspired by the QrCommunication/scell-io-scell-php pattern.
+Tag-based release from the exact validated commit on `main`.
 
-1. Add a new section to `CHANGELOG.md` under `## [X.Y.Z] - YYYY-MM-DD`.
-2. Commit: `git commit -am "chore: release vX.Y.Z"`.
-3. Tag and push:
-   ```bash
-   git tag -a vX.Y.Z -m "Release vX.Y.Z"
-   git push && git push origin vX.Y.Z
-   ```
-4. The `release.yml` workflow runs automatically on the tag:
-   - `test` — composer install + composer validate + PHPStan + PHPUnit matrix (PHP 8.2/8.3/8.4)
-   - `release` — creates a GitHub Release with notes extracted from `CHANGELOG.md`
-5. Packagist auto-syncs via the GitHub -> Packagist webhook (configured once in the repo's Settings -> Webhooks).
+1. Add one visible, non-empty section to `CHANGELOG.md` under `## [X.Y.Z] - YYYY-MM-DD`.
+   Keep the Composer library identity `qrcommunication/withallo-sdk` without a root `version` field.
+2. Stage the intended release files, commit and push them. Wait for the test and quality
+   workflow on that exact commit; an older green run does not validate new changes.
+3. Create and push an annotated stable `vX.Y.Z` tag on that validated commit. Do not move
+   a published tag. The tag, event SHA and checked-out HEAD must match exactly, and the
+   commit must belong to freshly fetched `main` history.
+4. `release.yml` runs the following dependency chain:
+   - `validate` checks the strict stable tag, exact commit, fresh `main` ancestry and Composer identity.
+   - `checks` reuses `tests.yml` at the same workflow revision. Its matrix expands to five jobs:
+     latest compatible dependencies on PHP 8.2/8.3/8.4/8.5, plus PHP 8.4 with Guzzle 7.
+     These jobs run dependency validation and audits, strict PHPUnit, PHPStan and Pint.
+   - `release` waits for both gates, extracts exactly one visible changelog section and
+     verifies the GitHub Release against the validated tag, exact target commit, notes and
+     stable policy (`draft: false`, `prerelease: false`). Missing, duplicate or invisible-only
+     notes must fail; generic fallback notes are not permitted.
+5. GitHub Release verification proves that source identity and release metadata only.
+   Packagist synchronization through the configured GitHub webhook requires separate
+   public proof: check the requested package version and exact source/dist references,
+   then install that public version in a fresh Composer consumer. A successful workflow
+   or GitHub Release alone does not prove Packagist availability or consumer installation.
+
+Local PHP 8.4 evidence described above is separate from execution of the full remote
+matrix and public publication checks. Report each proof only after it has been obtained.
