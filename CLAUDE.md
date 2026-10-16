@@ -152,7 +152,7 @@ La recette de reference `.github/workflows/tests.yml` se declenche sur push/PR `
 
 Preuve locale du 16 octobre 2026, PHP 8.4.26 : Guzzle 7.15.5/PHPUnit 11.5.57 et Guzzle 8.2.0/PHPUnit 13.4.3 passent chacun 36 tests et 91 assertions, sans echec, erreur ou skip. Les 9 nouveaux cas de `HttpClientTest` apportent 36 assertions sur les erreurs de connexion, les statuts 400/422/404/500 et `429 Retry-After`. PHPStan et Pint passent ; deux mutations privees (conversion reseau perdue, mauvais type 404) sont detectees. Le schema XML PHPUnit 11 reste accepte sans deprecation observee par PHPUnit 13.4.3.
 
-Cette preuve locale ne vaut pas execution de toute la matrice : les jobs GitHub distants, notamment PHP 8.2/8.3/8.5, restent a confirmer apres push. Aucun resultat local ne prouve la publication Packagist.
+Une preuve locale ne remplace pas la verification de chaque job de la matrice GitHub Actions sur le commit exact livre. Avant toute livraison, verifier et consigner le resultat de chaque job, y compris les gardes d'isolation. Verifier la publication Packagist separement.
 
 ## Release workflow
 

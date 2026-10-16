@@ -143,10 +143,50 @@ jobs:
           run_check pint php -d memory_limit=512M vendor/bin/pint --test
           php <<'PHP'
           <?php
+          $blocked = false;
+          $matchedLines = 0;
+          $diagnosticLimit = 20;
+          $knownLabels = ['phpunit', 'phpstan', 'test-phpstan', 'pint'];
+          $knownFamilies = ['AF_INET', 'AF_INET6', 'AF_UNIX', 'AF_NETLINK'];
+          $knownErrors = ['EACCES', 'EPERM', 'ENOENT', 'ECONNREFUSED', 'ENETUNREACH',
+              'EHOSTUNREACH', 'EAFNOSUPPORT', 'EAGAIN', 'EINPROGRESS', 'EBADF',
+              'EINVAL', 'ENOTSOCK', 'EADDRNOTAVAIL', 'EPIPE', 'ECONNRESET',
+              'ETIMEDOUT', 'EPROTONOSUPPORT', 'ENOBUFS', 'ENOMEM', 'EISCONN', 'EINTR'];
           foreach (glob('/tmp/withallo-home/*.network') as $trace) {
               if (preg_match('/\b(?:connect|sendto|sendmsg)\(/', file_get_contents($trace))) {
-                  throw new RuntimeException('Unexpected network attempt during isolated quality checks');
+                  $blocked = true;
+                  $label = pathinfo($trace, PATHINFO_FILENAME);
+                  $tool = in_array($label, $knownLabels, true) ? $label : 'unknown';
+                  foreach (file($trace, FILE_IGNORE_NEW_LINES) as $line) {
+                      if (!preg_match('/\b(connect|sendto|sendmsg)\(/', $line, $call)) {
+                          continue;
+                      }
+                      ++$matchedLines;
+                      if ($matchedLines > $diagnosticLimit) {
+                          continue;
+                      }
+                      // Project typed fields only: never emit arguments, paths or raw trace lines.
+                      $family = 'unknown';
+                      if (preg_match('/\b(AF_[A-Z0-9_]+)\b/', $line, $address)
+                          && in_array($address[1], $knownFamilies, true)) {
+                          $family = $address[1];
+                      }
+                      $result = 'unknown';
+                      $errno = 'unknown';
+                      if (preg_match('/\)\s+=\s+(-?[0-9]{1,9})(?:\s+([A-Z][A-Z0-9_]*))?(?:\s|$)/', $line, $returned)) {
+                          $result = (int) $returned[1];
+                          if (isset($returned[2]) && in_array($returned[2], $knownErrors, true)) {
+                              $errno = $returned[2];
+                          }
+                      }
+                      echo json_encode(['tool' => $tool, 'syscall' => $call[1],
+                          'family' => $family, 'return' => $result, 'errno' => $errno], JSON_THROW_ON_ERROR), "\n";
+                  }
               }
+          }
+          if ($blocked) {
+              echo json_encode(['network_diagnostic_omitted' => max(0, $matchedLines - $diagnosticLimit)], JSON_THROW_ON_ERROR), "\n";
+              throw new RuntimeException('Unexpected network attempt during isolated quality checks');
           }
           echo "No connect/sendto/sendmsg calls during isolated quality checks\n";
           PHP
