@@ -43,6 +43,12 @@ jobs:
           coverage: none
           tools: composer:2.10.3
 
+      - name: Setup Python for offline workflow probes
+        id: python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.15'
+
       - name: Get Composer download cache directory
         id: composer-cache
         run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
@@ -87,17 +93,21 @@ jobs:
           PHP
 
       - name: Run strict tests and quality checks without external networking
+        env:
+          QA_PYTHON: ${{ steps.python.outputs.python-path }}
         run: |
           set -euo pipefail
+          [[ "$QA_PYTHON" = /* && -x "$QA_PYTHON" ]]
           # GitHub-hosted Ubuntu allows passwordless sudo. Fail closed if isolation fails.
           timeout --signal=TERM --kill-after=10s 600 sudo --non-interactive \
             unshare --net --mount --pid --fork --mount-proc \
             env -i PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 \
-            bash -s -- "$PWD" "$(id -u)" "$(id -g)" <<'ISOLATED'
+            bash -s -- "$PWD" "$(id -u)" "$(id -g)" "$QA_PYTHON" <<'ISOLATED'
           set -euo pipefail
           repository=$1
           qa_uid=$2
           qa_gid=$3
+          qa_python=$4
           mount --make-rprivate /
           mount --bind "$repository" /mnt
           mount -t tmpfs -o mode=1777 tmpfs /tmp
@@ -113,11 +123,12 @@ jobs:
             --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs \
             env -i PATH=/usr/bin:/bin HOME=/tmp/withallo-home TMPDIR=/tmp \
             XDG_CONFIG_HOME=/tmp/withallo-home/config XDG_CACHE_HOME=/tmp/withallo-home/cache \
-            LANG=C.UTF-8 LC_ALL=C.UTF-8 APP_ENV=testing bash -s <<'CHECKS'
+            LANG=C.UTF-8 LC_ALL=C.UTF-8 APP_ENV=testing QA_PYTHON="$qa_python" bash -s <<'CHECKS'
           set -euo pipefail
           ulimit -c 0
           ulimit -v 1048576
           ulimit -t 120
+          "$QA_PYTHON" -I -B tests/workflow_probes.py
           run_check() {
             label=$1
             shift
@@ -143,7 +154,26 @@ jobs:
           run_check pint php -d memory_limit=512M vendor/bin/pint --test
           php <<'PHP'
           <?php
+          // A completed missing pathname IPC endpoint carries no application payload.
+          // Authorize only this full record; diagnostic projections never authorize calls.
+          function isMissingLocalIpcConnect(string $line): bool
+          {
+              if (str_contains($line, '<unfinished ...>') || str_contains($line, '<... ')) {
+                  return false;
+              }
+              $pattern = <<<'LOCALIPC'
+          ~\A[ \t]*(?:(?<pid>[1-9][0-9]{0,9})[ \t]+)?connect\((?<fd>0|[1-9][0-9]{0,9}),[ \t]*\{sa_family=AF_UNIX,[ \t]*sun_path="(?<path>[^"\\\x00-\x1f\x7f]{1,107})"\},[ \t]*(?<length>[1-9][0-9]{0,2})\)[ \t]*=[ \t]*-1 ENOENT \(No such file or directory\)[ \t]*\z~
+          LOCALIPC;
+              if (preg_match($pattern, $line, $record) !== 1) {
+                  return false;
+              }
+              return (int) $record['fd'] <= 2147483647
+                  && ($record['pid'] === '' || (int) $record['pid'] <= 2147483647)
+                  && (int) $record['length'] >= 3 && (int) $record['length'] <= 110
+                  && strlen($record['path']) <= 107;
+          }
           $blocked = false;
+          $allowedLocalIpc = 0;
           $matchedLines = 0;
           $diagnosticLimit = 20;
           $knownLabels = ['phpunit', 'phpstan', 'test-phpstan', 'pint'];
@@ -153,42 +183,49 @@ jobs:
               'EINVAL', 'ENOTSOCK', 'EADDRNOTAVAIL', 'EPIPE', 'ECONNRESET',
               'ETIMEDOUT', 'EPROTONOSUPPORT', 'ENOBUFS', 'ENOMEM', 'EISCONN', 'EINTR'];
           foreach (glob('/tmp/withallo-home/*.network') as $trace) {
-              if (preg_match('/\b(?:connect|sendto|sendmsg)\(/', file_get_contents($trace))) {
-                  $blocked = true;
-                  $label = pathinfo($trace, PATHINFO_FILENAME);
-                  $tool = in_array($label, $knownLabels, true) ? $label : 'unknown';
-                  foreach (file($trace, FILE_IGNORE_NEW_LINES) as $line) {
-                      if (!preg_match('/\b(connect|sendto|sendmsg)\(/', $line, $call)) {
-                          continue;
-                      }
-                      ++$matchedLines;
-                      if ($matchedLines > $diagnosticLimit) {
-                          continue;
-                      }
-                      // Project typed fields only: never emit arguments, paths or raw trace lines.
-                      $family = 'unknown';
-                      if (preg_match('/\b(AF_[A-Z0-9_]+)\b/', $line, $address)
-                          && in_array($address[1], $knownFamilies, true)) {
-                          $family = $address[1];
-                      }
-                      $result = 'unknown';
-                      $errno = 'unknown';
-                      if (preg_match('/\)\s+=\s+(-?[0-9]{1,9})(?:\s+([A-Z][A-Z0-9_]*))?(?:\s|$)/', $line, $returned)) {
-                          $result = (int) $returned[1];
-                          if (isset($returned[2]) && in_array($returned[2], $knownErrors, true)) {
-                              $errno = $returned[2];
-                          }
-                      }
-                      echo json_encode(['tool' => $tool, 'syscall' => $call[1],
-                          'family' => $family, 'return' => $result, 'errno' => $errno], JSON_THROW_ON_ERROR), "\n";
+              $label = pathinfo($trace, PATHINFO_FILENAME);
+              $tool = in_array($label, $knownLabels, true) ? $label : 'unknown';
+              foreach (file($trace, FILE_IGNORE_NEW_LINES) as $line) {
+                  if (!preg_match('/\b(connect|sendto|sendmsg)(?:\(|\s+resumed>)/', $line, $call)) {
+                      continue;
                   }
+                  if (isMissingLocalIpcConnect($line)) {
+                      ++$allowedLocalIpc;
+                      continue;
+                  }
+                  $blocked = true;
+                  ++$matchedLines;
+                  if ($matchedLines > $diagnosticLimit) {
+                      continue;
+                  }
+                  // Project typed fields only: never emit arguments, paths or raw trace lines.
+                  $family = 'unknown';
+                  if (preg_match('/\b(AF_[A-Z0-9_]+)\b/', $line, $address)
+                      && in_array($address[1], $knownFamilies, true)) {
+                      $family = $address[1];
+                  }
+                  $result = 'unknown';
+                  $errno = 'unknown';
+                  if (preg_match('/\)\s+=\s+(-?[0-9]{1,9})(?:\s+([A-Z][A-Z0-9_]*))?(?:\s|$)/', $line, $returned)) {
+                      $result = (int) $returned[1];
+                      if (isset($returned[2]) && in_array($returned[2], $knownErrors, true)) {
+                          $errno = $returned[2];
+                      }
+                  }
+                  echo json_encode(['tool' => $tool, 'syscall' => $call[1],
+                      'family' => $family, 'return' => $result, 'errno' => $errno], JSON_THROW_ON_ERROR), "\n";
               }
+          }
+          if ($allowedLocalIpc > 0) {
+              echo json_encode(['allowed_missing_local_ipc_connects' => $allowedLocalIpc], JSON_THROW_ON_ERROR), "\n";
           }
           if ($blocked) {
               echo json_encode(['network_diagnostic_omitted' => max(0, $matchedLines - $diagnosticLimit)], JSON_THROW_ON_ERROR), "\n";
               throw new RuntimeException('Unexpected network attempt during isolated quality checks');
           }
-          echo "No connect/sendto/sendmsg calls during isolated quality checks\n";
+          echo $allowedLocalIpc > 0
+              ? "No prohibited connect/sendto/sendmsg calls during isolated quality checks\n"
+              : "No connect/sendto/sendmsg calls during isolated quality checks\n";
           PHP
           CHECKS
           ISOLATED
